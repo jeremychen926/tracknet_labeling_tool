@@ -16,7 +16,7 @@ COLORS = [
     QColor(255, 192, 203), QColor(128, 128, 0)
 ]
 # Number of previous frames to overlay
-HISTORY = 5
+HISTORY = 4
 
 class VideoView(QGraphicsView):
     def __init__(self, parent=None):
@@ -110,7 +110,7 @@ class MainWindow(QMainWindow):
 
         # --- Show history or not ---
         self.show_history = True
-        self.history_checkbox = QCheckBox("Show last 5 frames")
+        self.history_checkbox = QCheckBox("Show last 4 frames")
         self.history_checkbox.setFont(font)
         self.history_checkbox.setChecked(True)        # default on
         self.history_checkbox.stateChanged.connect(self.on_history_toggled)
@@ -121,6 +121,8 @@ class MainWindow(QMainWindow):
         self.frame_label.setFont(font)
         self.current_id_label = QLabel(f"Current ID: {self.current_id}")
         self.current_id_label.setFont(font)
+
+        self.rebuild_id_list_from_data()
 
         # --- Navigation buttons ---
         font.setPointSize(16)
@@ -202,7 +204,7 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.next_frame)
         self.current_frame = 0
-        self.update_frame()
+        self.seek_frame(0)
 
         self.video_view.resetTransform()
         self.video_view.fitInView(self.video_view.sceneRect(), Qt.KeepAspectRatio)
@@ -436,6 +438,26 @@ class MainWindow(QMainWindow):
         self.video_view.scene.setSceneRect(0, 0, self.frame_w, self.frame_h)
         self.slider.setValue(self.current_frame)
 
+    def rebuild_id_list_from_data(self):
+        """根據已載入到 self.coordinates 的資料，將左側 ID 清單重建為 0..(max_id+1)"""
+        # 收集所有已出現的 id
+        all_ids = [i for pts in self.coordinates for (i, _, _) in pts]
+        max_id = max(all_ids) if all_ids else 0  # 若沒有資料，視為 0
+
+        # 重建清單：0..(max_id+1)
+        self.id_list.blockSignals(True)
+        self.id_list.clear()
+        for i in range(0, max_id + 2):
+            item = QListWidgetItem(f"ID {i}")
+            item.setIcon(self.create_color_icon(i))
+            self.id_list.addItem(item)
+        self.id_list.setCurrentRow(0)
+        self.id_list.blockSignals(False)
+
+        # 同步目前 ID 顯示
+        self.current_id = 0
+        self.current_id_label.setText(f"Current ID: {self.current_id}")
+
     def closeEvent(self, event):
         ans = QMessageBox.question(
             self, "Confirm Exit", "Save and quit?",
@@ -450,16 +472,14 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def load_json(self):
-        path = "json/output_ball.json"
-        if not os.path.exists(path):
-            print(f"JSON file {path} does not exist, skipping load.")
+        if not os.path.exists(json_name):
             return
         try:
-            with open(path, 'r') as f:
+            with open(json_name, 'r') as f:
                 data = json.load(f)
         except Exception as e:
             QMessageBox.warning(self, "Load failed",
-                                f"無法讀取 {path}:\n{e}")
+                                f"無法讀取 {json_name}:\n{e}")
             return
 
         # data 是 list of { "Frame": fid, "Objects": [ {id, X, Y}, ... ] }
@@ -486,11 +506,34 @@ class MainWindow(QMainWindow):
                 "Frame": fid,
                 "Objects": [{"id": i, "X": x, "Y": y} for i, x, y in pts]
             })
-        with open("output_ball.json", "w") as f:
+
+        with open(json_name, "w") as f:
             json.dump(data, f, indent=4)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    w = MainWindow(sys.argv[1])
+    if len(sys.argv) < 2 or os.path.isdir(sys.argv[1]):
+        if len(sys.argv) < 2:
+            os.chdir(os.path.dirname(os.path.abspath(__file__)))
+        else:
+            os.chdir(sys.argv[1])
+        for i, f in enumerate(os.listdir('video')):
+            if os.path.isfile(os.path.join('json', os.path.splitext(f)[0] + '_track.json')):
+                print(f'{i+1:3d}: {f} (labeled)')
+            else:
+                print(f'{i+1:3d}: {f}')
+        idx = int(input('Enter the video number: '))
+        video_name = 'video/' + os.listdir('video')[idx-1]
+    else:
+        video_name = sys.argv[1]
+
+    parent_dir = os.path.dirname(os.path.dirname(video_name))
+    json_dir = os.path.join(parent_dir, 'json')
+    if not os.path.exists(json_dir):
+        os.makedirs(json_dir)
+    json_file_name = os.path.splitext(os.path.basename(video_name))[0] + '_track.json'
+    json_name = os.path.join(json_dir, json_file_name)
+    
+    w = MainWindow(video_name)
     w.showMaximized()
     sys.exit(app.exec_())
